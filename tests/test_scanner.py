@@ -4,30 +4,24 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from auditMarAx.cli import build_parser
+from auditMarAx.analysis import extension_sizes, find_duplicates, largest_files
 from auditMarAx.scanner import scan_directory
 
 
 class ScanDirectoryTests(unittest.TestCase):
-    def test_scan_saves_metadata_and_respects_filters(self) -> None:
+    def test_scan_saves_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             base = Path(temporary_directory)
             directory = base / "files"
-            excluded_directory = directory / "ignored"
-            excluded_directory.mkdir(parents=True)
+            directory.mkdir()
             included_file = directory / "notes.txt"
             included_file.write_text("hello", encoding="utf-8")
             (directory / "script.py").write_text("print('hi')", encoding="utf-8")
-            (excluded_directory / "hidden.txt").write_text(
-                "ignored", encoding="utf-8"
-            )
             database = base / "scan.sqlite3"
 
-            scanned, skipped, errors = scan_directory(
-                directory, database, excludes=["ignored", "*.py"], includes=["*.txt"]
-            )
+            scanned, errors = scan_directory(directory, database)
 
-            self.assertEqual((scanned, skipped, errors), (1, 1, []))
+            self.assertEqual((scanned, errors), (2, []))
             with sqlite3.connect(database) as connection:
                 row = connection.execute(
                     """
@@ -65,7 +59,7 @@ class ScanDirectoryTests(unittest.TestCase):
                     """
                 )
 
-            scanned, _, errors = scan_directory(directory, database)
+            scanned, errors = scan_directory(directory, database)
 
             self.assertEqual((scanned, errors), (1, []))
             with sqlite3.connect(database) as connection:
@@ -75,14 +69,35 @@ class ScanDirectoryTests(unittest.TestCase):
             self.assertEqual(extension, ".dat")
 
 
-class CliArgumentTests(unittest.TestCase):
-    def test_accepts_repeated_filters(self) -> None:
-        args = build_parser().parse_args(
-            ["--exclude", "*.pyc", "--exclude", ".git", "--include", "*.py"]
-        )
+class AnalysisTests(unittest.TestCase):
+    def test_find_duplicates_and_rank_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base = Path(temporary_directory)
+            directory = base / "files"
+            other_directory = base / "other"
+            directory.mkdir()
+            other_directory.mkdir()
+            (directory / "first.txt").write_text("same", encoding="utf-8")
+            (directory / "second.txt").write_text("same", encoding="utf-8")
+            (directory / "large.bin").write_bytes(b"x" * 20)
+            (other_directory / "larger.bin").write_bytes(b"x" * 30)
+            database = base / "scan.sqlite3"
 
-        self.assertEqual(args.exclude, ["*.pyc", ".git"])
-        self.assertEqual(args.include, ["*.py"])
+            scan_directory(directory, database)
+            scan_directory(other_directory, database)
+
+            duplicates = find_duplicates(database, directory)
+            biggest = largest_files(database, directory, limit=2)
+            by_extension = extension_sizes(database, directory)
+
+            self.assertEqual(len(duplicates), 1)
+            self.assertEqual(duplicates[0][0], 4)
+            self.assertEqual(len(duplicates[0][1]), 2)
+            self.assertEqual(biggest[0], (str(directory / "large.bin"), 20))
+            self.assertEqual(
+                by_extension,
+                [(".bin", 1, 20), (".txt", 2, 8)],
+            )
 
 
 if __name__ == "__main__":

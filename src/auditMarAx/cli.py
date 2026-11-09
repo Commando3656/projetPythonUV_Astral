@@ -1,11 +1,10 @@
-import argparse
 import logging
 import sqlite3
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog
-from typing import Sequence
 
+from auditMarAx.analysis import extension_sizes, find_duplicates, largest_files
 from auditMarAx.scanner import scan_directory
 
 
@@ -24,9 +23,34 @@ def choose_directory() -> Path | None:
         root.destroy()
 
 
-def read_patterns(prompt: str) -> list[str]:
-    value = input(prompt).strip()
-    return [pattern.strip() for pattern in value.split(",") if pattern.strip()]
+def show_duplicates(directory: Path) -> None:
+    duplicates = find_duplicates(DATABASE, directory)
+    if not duplicates:
+        print("Aucun doublon trouvé.")
+        return
+
+    recoverable = 0
+    for size, paths in duplicates:
+        recoverable += size * (len(paths) - 1)
+        print(f"\nDoublon ({size} octets par fichier) :")
+        for path in paths:
+            print(f"  {path}")
+    print(f"\nEspace récupérable : {recoverable} octets.")
+
+
+def show_largest_files(directory: Path) -> None:
+    files = largest_files(DATABASE, directory)
+    if not files:
+        print("Aucun fichier indexé. Lancez d'abord un scan.")
+        return
+
+    print("\nFichiers les plus volumineux :")
+    for path, size in files:
+        print(f"{size:>12} octets  {path}")
+
+    print("\nEspace utilisé par extension :")
+    for extension, count, size in extension_sizes(DATABASE, directory):
+        print(f"{extension or '(sans extension)'} : {count} fichier(s), {size} octets")
 
 
 def configure_logging() -> None:
@@ -41,31 +65,9 @@ def configure_logging() -> None:
     )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Scanner de fichiers")
-    parser.add_argument(
-        "--exclude",
-        action="append",
-        default=[],
-        metavar="MOTIF",
-        help="Ignorer un nom ou chemin (option répétable)",
-    )
-    parser.add_argument(
-        "--include",
-        action="append",
-        default=[],
-        metavar="MOTIF",
-        help="Ne garder que les noms ou chemins correspondants (répétable)",
-    )
-    return parser
-
-
-def main(argv: Sequence[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
+def main() -> None:
     configure_logging()
     directory: Path | None = None
-    excludes = args.exclude
-    includes = args.include
 
     try:
         directory = choose_directory()
@@ -81,8 +83,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(
             "\n===== Menu principal =====\n"
             "1 - Lancer le scan\n"
-            "2 - Configurer les filtres\n"
-            "3 - Choisir un répertoire\n"
+            "2 - Analyser les doublons\n"
+            "3 - Classer les fichiers par volume\n"
+            "4 - Choisir un répertoire\n"
             "0 - Quitter"
         )
         try:
@@ -94,35 +97,43 @@ def main(argv: Sequence[str] | None = None) -> None:
         match choice:
             case "1":
                 if directory is None:
-                    print("Choisissez d'abord un répertoire (option 3).")
+                    print("Choisissez d'abord un répertoire (option 4).")
                     continue
                 try:
-                    scanned, skipped, errors = scan_directory(
-                        directory, DATABASE, excludes, includes
-                    )
+                    scanned, errors = scan_directory(directory, DATABASE)
                     print(
                         f"Scan terminé : {scanned} fichier(s) analysé(s), "
-                        f"{skipped} ignoré(s), {len(errors)} erreur(s)."
+                        f"{len(errors)} erreur(s)."
                     )
                     if len(errors) > 5:
                         print(f"... et {len(errors) - 5} autre(s) erreur(s).")
                 except (OSError, sqlite3.Error) as error:
                     logging.error("Échec du scan : %s", error)
             case "2":
+                if directory is None:
+                    print("Choisissez d'abord un répertoire (option 4).")
+                    continue
                 try:
-                    excludes = read_patterns(
-                        "Exclusions (motifs séparés par des virgules, "
-                        "vide pour aucune) : "
+                    show_duplicates(directory)
+                except sqlite3.Error as error:
+                    print(
+                        "Impossible d'analyser la base. Lancez d'abord un scan : "
+                        f"{error}"
                     )
-                    includes = read_patterns(
-                        "Inclusions (motifs séparés par des virgules, "
-                        "vide pour toutes) : "
-                    )
-                    print(f"Exclusions : {excludes or 'aucune'}")
-                    print(f"Inclusions : {includes or 'tous les fichiers'}")
-                except (EOFError, KeyboardInterrupt):
-                    print("\nConfiguration des filtres annulée.")
+                    logging.error("Échec de l'analyse des doublons : %s", error)
             case "3":
+                if directory is None:
+                    print("Choisissez d'abord un répertoire (option 4).")
+                    continue
+                try:
+                    show_largest_files(directory)
+                except sqlite3.Error as error:
+                    print(
+                        "Impossible d'analyser la base. Lancez d'abord un scan : "
+                        f"{error}"
+                    )
+                    logging.error("Échec du classement des fichiers : %s", error)
+            case "4":
                 try:
                     selected = choose_directory()
                     if selected:
@@ -136,7 +147,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 print("Arrêt du programme.")
                 break
             case _:
-                print("Choix invalide. Entrez 0, 1, 2 ou 3.")
+                print("Choix invalide. Entrez 0, 1, 2, 3 ou 4.")
 
 
 if __name__ == "__main__":
