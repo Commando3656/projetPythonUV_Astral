@@ -1,7 +1,7 @@
 [project]
 name = "auditMarAx"
 version = "0.1.0"
-description = "Add your description here"
+description = "Scanner de fichiers en ligne de commande"
 readme = "README.md"
 authors = [
     { name = "marius.furon", email = "marius.furon@icloud.com" }

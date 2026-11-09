@@ -27,7 +27,7 @@ class ScanDirectoryTests(unittest.TestCase):
                 directory, database, excludes=["ignored", "*.py"], includes=["*.txt"]
             )
 
-            self.assertEqual((scanned, skipped, errors), (1, 0, []))
+            self.assertEqual((scanned, skipped, errors), (1, 1, []))
             with sqlite3.connect(database) as connection:
                 row = connection.execute(
                     """

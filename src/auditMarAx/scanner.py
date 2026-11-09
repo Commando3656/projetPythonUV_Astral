@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
+from auditMarAx.database import prepare_database, save_file
+
 
 logger = logging.getLogger(__name__)
 
@@ -37,27 +39,7 @@ def scan_directory(
 
     with closing(sqlite3.connect(database_path)) as connection:
         with connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS files (
-                    path TEXT PRIMARY KEY,
-                    size INTEGER NOT NULL,
-                    modified_at TEXT NOT NULL,
-                    created_at TEXT,
-                    extension TEXT NOT NULL DEFAULT '',
-                    sha256 TEXT NOT NULL,
-                    mime_type TEXT NOT NULL,
-                    scanned_at TEXT NOT NULL
-                )
-                """
-            )
-            columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(files)")
-            }
-            if "extension" not in columns:
-                connection.execute(
-                    "ALTER TABLE files ADD COLUMN extension TEXT NOT NULL DEFAULT ''"
-                )
+            prepare_database(connection)
 
             def report_walk_error(error: OSError) -> None:
                 message = f"{error.filename}: {error}"
@@ -121,31 +103,16 @@ def scan_directory(
                             timespec="seconds"
                         )
 
-                        connection.execute(
-                            """
-                            INSERT INTO files
-                                (path, size, modified_at, created_at, extension,
-                                 sha256, mime_type, scanned_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT(path) DO UPDATE SET
-                                size = excluded.size,
-                                modified_at = excluded.modified_at,
-                                created_at = excluded.created_at,
-                                extension = excluded.extension,
-                                sha256 = excluded.sha256,
-                                mime_type = excluded.mime_type,
-                                scanned_at = excluded.scanned_at
-                            """,
-                            (
-                                str(path),
-                                metadata.st_size,
-                                modified_at,
-                                created_at,
-                                extension,
-                                digest,
-                                mime_type,
-                                scanned_at,
-                            ),
+                        save_file(
+                            connection,
+                            path,
+                            metadata.st_size,
+                            modified_at,
+                            created_at,
+                            extension,
+                            digest,
+                            mime_type,
+                            scanned_at,
                         )
                         scanned += 1
                     except (OSError, RuntimeError, OverflowError) as error:
